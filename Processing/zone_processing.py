@@ -199,6 +199,8 @@ def out_track_coordinates(track_id, zone, fmm_output_df, no_osm_df, no_osm_df_pa
     no_osm_df = pd.concat([no_osm_df, filtered_df], ignore_index=True)
     no_osm_df.to_csv(no_osm_df_path, index=False)
 
+    return no_osm_df
+
 # Process to output the files
 def output_process(file_path, out_df, out_df_path, zone, info, training_process, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path):
 
@@ -219,8 +221,6 @@ def output_process(file_path, out_df, out_df_path, zone, info, training_process,
                                               'mean_point_error': [np.mean([c.error for c in fmm_result.candidates])],
                                               'is_training': [training_process]})], ignore_index=True)
     out_df.to_csv(out_df_path, index=False)  
-
-    print(out_df)
 
     # Concatenate the new coordinates with the old ones
     new_track = fmm_result.pgeom.export_wkt()
@@ -254,9 +254,9 @@ def output_process(file_path, out_df, out_df_path, zone, info, training_process,
         json.dump(json_data, file, ensure_ascii=False, indent=4)
 
     # Proceed with the coordinates that have a big error
-    out_track_coordinates(info['track'], zone, coordinates_df, no_osm_df, no_osm_df_path)
+    no_osm_df = out_track_coordinates(info['track'], zone, coordinates_df, no_osm_df, no_osm_df_path)
 
-    return out_df
+    return out_df, no_osm_df
 
 # Function to process all tracks
 def process_all_tracks(zone, raw_path, output_path, model, total_required_training_files=100):
@@ -279,8 +279,6 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
         out_df = pd.DataFrame(columns=['track_id', 'zone', 'url', 'user', 'title', 'date_up', 'activity_type', 'activity_type_name', 
                                        'difficulty', 'distance', 'k', 'radius', 'gps_error', 'mean_point_error', 'is_training'])
         
-    print(out_df)
-
     # No-OSM data dataframe creation
     if os.path.exists(no_osm_df_path):
         no_osm_df = pd.read_csv(no_osm_df_path)
@@ -291,8 +289,6 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
     disc_files = disc_df['track_id'].unique().tolist()
     out_files = out_df['track_id'].unique().tolist()
     processed_files = list(set(disc_files + out_files))
-
-    print(processed_files)
 
     # Check if we need to proceed with the training or not
     training_output = out_df[out_df['is_training'] == 1]  
@@ -349,7 +345,7 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
                 if valid_file:
                     print(f"    Found matching path for file {track_id}. Parameters k={k}, r={r}, e={e}")
                     file_output_path = os.path.join(output_path, file)      # Define the output path
-                    out_df = output_process(file_output_path, out_df, out_df_path, zone, info, training_process, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path)
+                    out_df, no_osm_df = output_process(file_output_path, out_df, out_df_path, zone, info, training_process, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path)
                 
                 else:
                     # Concatenate the info with the discard dataframe and save it
