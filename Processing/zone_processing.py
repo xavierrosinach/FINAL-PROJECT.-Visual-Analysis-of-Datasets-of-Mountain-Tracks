@@ -4,6 +4,7 @@ import shutil
 import zipfile
 import signal
 import json
+import multiprocessing
 import numpy as np
 import osmnx as ox
 from pyproj import Transformer
@@ -25,6 +26,30 @@ class TimeoutException(Exception):
 
 def timeout_handler(signum, frame):
     raise TimeoutException("Function execution timed out")
+
+def run_fmm_match(model, track_wkt, k, r, e, queue):
+    try:
+        config = FastMapMatchConfig(k, r, e)
+        result = model.match_wkt(track_wkt, config)
+        queue.put((True, 0, result))  # Indicating success
+    except Exception as e:
+        queue.put((False, str(e), None))  # Capture any other exceptions
+
+def safe_match(model, track_wkt, k, r, e, timeout=60):
+    queue = multiprocessing.Queue()
+    process = multiprocessing.Process(target=run_fmm_match, args=(model, track_wkt, k, r, e, queue))
+    process.start()
+    process.join(timeout)
+
+    if process.is_alive():
+        process.terminate()  # Kill the process if it hangs
+        process.join()
+        return False, 7, None  # Segmentation fault detected
+
+    if not queue.empty():
+        return queue.get()
+
+    return False, 7, None  # If queue is empty, assume a failure
 
 # Extract the information of the json file as a dictionary - waypoints and coordinates as dataframes
 def extract_information(json_path):
@@ -115,71 +140,37 @@ def matching_track_training(model, coordinates_df, timeout=60):
     for k in k_candidates:
         for r in r_candidates:
             for e in e_candidates:
+                valid, error_type, result = safe_match(model, track_wkt, k, r, e, timeout)
 
-                signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(timeout)  # Trigger alarm after `timeout` seconds
+                if not valid:
+                    if error_type == 7:  # Segmentation fault detected
+                        continue
+                    else:
+                        continue
 
-                try:
-                    # Obtain the fmm result
-                    config = FastMapMatchConfig(k,r,e)
-                    result = model.match_wkt(track_wkt, config)
-                except TimeoutException:
-                    continue
-                finally:
-                    signal.alarm(0)
+                mean_error = np.mean([c.error for c in result.candidates])
 
-                # Check if we do not obtain an empty output
-                if result.pgeom.export_wkt().strip() == "LINESTRING()":
-                    continue
+                if mean_error < min_error:
+                    min_error, best_result, best_k, best_r, best_e = mean_error, result, k, r, e
 
-                else:   
-                    mean_error = np.mean([c.error for c in result.candidates])
-
-                # If the error is less than the previous, this is the best matching track
-                if mean_error < minimum_error:
-                    minimum_error = mean_error
-                    best_result = result
-                    best_k = k
-                    best_r = r
-                    best_e = e
-                else:
-                    continue
-    
-    # Return error if the result has not been found
-    if best_result is not None:
-        return True, 0, best_result, best_k, best_r, best_e
-    else:
-        return False, 5, best_result, best_k, best_r, best_e
+    return (True, 0, best_result, best_k, best_r, best_e) if best_result else (False, 5, None, 0, 0, 0)
 
 # Function to obtain the matching track - training process
 def matching_track_test(model, coordinates_df, radius, gps_error, timeout=60):
 
-    # Define the candidates
     k_candidates = [2, 3, 4]
 
-    # Get the track wkt
     line = LineString(zip(coordinates_df["Longitude"], coordinates_df["Latitude"]))
     track_wkt = line.wkt
 
-    # Try for all candidates
     for k in k_candidates:
+        valid, error_type, result = safe_match(model, track_wkt, k, radius, gps_error, timeout)
 
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout)  # Trigger alarm after `timeout` seconds
-
-        try:
-            # Obtain the fmm result
-            config = FastMapMatchConfig(k,radius,gps_error)
-            result = model.match_wkt(track_wkt, config)
-        except TimeoutException:
-            continue
-        finally:
-            signal.alarm(0)
-
-        # Check if we do not obtain an empty output
-        if result.pgeom.export_wkt().strip() != "LINESTRING()":
+        if valid:
             return True, 0, result
-    
+        elif error_type == 7:  # Segmentation fault detected
+            continue
+
     return False, 6, None
 
 # Function to save the coordinates that have more than 5 meters of error
