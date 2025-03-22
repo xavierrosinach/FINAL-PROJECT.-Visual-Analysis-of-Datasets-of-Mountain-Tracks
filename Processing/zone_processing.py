@@ -4,7 +4,6 @@ import shutil
 import zipfile
 import signal
 import json
-import multiprocessing
 import numpy as np
 import osmnx as ox
 from pyproj import Transformer
@@ -26,30 +25,6 @@ class TimeoutException(Exception):
 
 def timeout_handler(signum, frame):
     raise TimeoutException("Function execution timed out")
-
-def run_fmm_match(model, track_wkt, k, r, e, queue):
-    try:
-        config = FastMapMatchConfig(k, r, e)
-        result = model.match_wkt(track_wkt, config)
-        queue.put((True, 0, result))  # Indicating success
-    except Exception as e:
-        queue.put((False, str(e), None))  # Capture any other exceptions
-
-def safe_match(model, track_wkt, k, r, e, timeout=60):
-    queue = multiprocessing.Queue()
-    process = multiprocessing.Process(target=run_fmm_match, args=(model, track_wkt, k, r, e, queue))
-    process.start()
-    process.join(timeout)
-
-    if process.is_alive():
-        process.terminate()  # Kill the process if it hangs
-        process.join()
-        return False, 7, None  # Segmentation fault detected
-
-    if not queue.empty():
-        return queue.get()
-
-    return False, 7, None  # If queue is empty, assume a failure
 
 # Extract the information of the json file as a dictionary - waypoints and coordinates as dataframes
 def extract_information(json_path):
@@ -73,7 +48,7 @@ def extract_information(json_path):
         "coordinates": pd.DataFrame(data["coordinates"], columns=["Longitude", "Latitude", "Elevation", "Unknown"])}
 
 # Function to check if we need to discard the file depending on the coordinates df
-def discard_coordinates(zone, coordinates_df, min_coordinates=100, max_distance=300, min_total_distance=1000):
+def discard_coordinates(zone, coordinates_df, min_coordinates=100, max_distance=300, min_total_distance=1000, max_total_distance=20000):
 
     if zone == 'canigo':
         bounds = bounds_canigo
@@ -140,37 +115,73 @@ def matching_track_training(model, coordinates_df, timeout=60):
     for k in k_candidates:
         for r in r_candidates:
             for e in e_candidates:
-                valid, error_type, result = safe_match(model, track_wkt, k, r, e, timeout)
 
-                if not valid:
-                    if error_type == 7:  # Segmentation fault detected
-                        continue
-                    else:
-                        continue
+                print(f"    {k} // {r} // {e}")
 
-                mean_error = np.mean([c.error for c in result.candidates])
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(timeout)  # Trigger alarm after `timeout` seconds
 
-                if mean_error < min_error:
-                    min_error, best_result, best_k, best_r, best_e = mean_error, result, k, r, e
+                try:
+                    # Obtain the fmm result
+                    config = FastMapMatchConfig(k,r,e)
+                    result = model.match_wkt(track_wkt, config)
+                except TimeoutException:
+                    continue
+                finally:
+                    signal.alarm(0)
 
-    return (True, 0, best_result, best_k, best_r, best_e) if best_result else (False, 5, None, 0, 0, 0)
+                # Check if we do not obtain an empty output
+                if result.pgeom.export_wkt().strip() == "LINESTRING()":
+                    continue
+
+                else:   
+                    mean_error = np.mean([c.error for c in result.candidates])
+
+                # If the error is less than the previous, this is the best matching track
+                if mean_error < minimum_error:
+                    minimum_error = mean_error
+                    best_result = result
+                    best_k = k
+                    best_r = r
+                    best_e = e
+                else:
+                    continue
+    
+    # Return error if the result has not been found
+    if best_result is not None:
+        return True, 0, best_result, best_k, best_r, best_e
+    else:
+        return False, 5, best_result, best_k, best_r, best_e
 
 # Function to obtain the matching track - training process
 def matching_track_test(model, coordinates_df, radius, gps_error, timeout=60):
 
+    # Define the candidates
     k_candidates = [2, 3, 4]
 
+    # Get the track wkt
     line = LineString(zip(coordinates_df["Longitude"], coordinates_df["Latitude"]))
     track_wkt = line.wkt
 
+    # Try for all candidates
     for k in k_candidates:
-        valid, error_type, result = safe_match(model, track_wkt, k, radius, gps_error, timeout)
 
-        if valid:
-            return True, 0, result
-        elif error_type == 7:  # Segmentation fault detected
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout)  # Trigger alarm after `timeout` seconds
+
+        try:
+            # Obtain the fmm result
+            config = FastMapMatchConfig(k,radius,gps_error)
+            result = model.match_wkt(track_wkt, config)
+        except TimeoutException:
             continue
+        finally:
+            signal.alarm(0)
 
+        # Check if we do not obtain an empty output
+        if result.pgeom.export_wkt().strip() != "LINESTRING()":
+            return True, 0, result
+    
     return False, 6, None
 
 # Function to save the coordinates that have more than 5 meters of error
@@ -189,8 +200,6 @@ def out_track_coordinates(track_id, zone, fmm_output_df, no_osm_df, no_osm_df_pa
     # Append new data to existing no_osm_df and save it as CSV
     no_osm_df = pd.concat([no_osm_df, filtered_df], ignore_index=True)
     no_osm_df.to_csv(no_osm_df_path, index=False)
-
-    return no_osm_df
 
 # Process to output the files
 def output_process(file_path, out_df, out_df_path, zone, info, training_process, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path):
@@ -245,9 +254,9 @@ def output_process(file_path, out_df, out_df_path, zone, info, training_process,
         json.dump(json_data, file, ensure_ascii=False, indent=4)
 
     # Proceed with the coordinates that have a big error
-    no_osm_df = out_track_coordinates(info['track'], zone, coordinates_df, no_osm_df, no_osm_df_path)
+    out_track_coordinates(info['track'], zone, coordinates_df, no_osm_df, no_osm_df_path)
 
-    return out_df, no_osm_df
+    return out_df
 
 # Function to process all tracks
 def process_all_tracks(zone, raw_path, output_path, model, total_required_training_files=100):
@@ -315,6 +324,8 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
 
             # Check if we need to discard the coordinates
             valid_file, error_type, total_distance = discard_coordinates(zone, info['coordinates'])
+            km = np.round(total_distance/1000,2)
+            print(f'    Total distance: {km} km.')
 
             # If the file is valid, we will process with the matching
             if valid_file:
@@ -336,7 +347,7 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
                 if valid_file:
                     print(f"    Found matching path for file {track_id}. Parameters k={k}, r={r}, e={e}")
                     file_output_path = os.path.join(output_path, file)      # Define the output path
-                    out_df, no_osm_df = output_process(file_output_path, out_df, out_df_path, zone, info, training_process, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path)
+                    out_df = output_process(file_output_path, out_df, out_df_path, zone, info, training_process, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path)
                 
                 else:
                     # Concatenate the info with the discard dataframe and save it
@@ -351,6 +362,8 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
                                                         'zone': [zone], 
                                                         'error_type': error_type})], ignore_index=True)
                 disc_df.to_csv(disc_df_path, index=False)  
+
+                print(f"    Error type: {error_type}")
 
 # Function to extract the JSON files of the zip file
 def extract_zip(zone, extract_path):
@@ -421,9 +434,9 @@ def create_network(zone, network_path):
 def main_processing(zone):
 
     # Define all the paths for the zone
-    raw_path = f'../Data/Raw-Data/{zone}'
-    output_path = f'../Data/Output/{zone}'
-    network_path = f'../Data/OSM-Data/{zone}'
+    raw_path = f'../../Data/Raw-Data/{zone}'
+    output_path = f'../../Data/Output/{zone}'
+    network_path = f'../../Data/OSM-Data/{zone}'
 
     # Create the output path if it does not exist
     os.makedirs(output_path, exist_ok=True)
