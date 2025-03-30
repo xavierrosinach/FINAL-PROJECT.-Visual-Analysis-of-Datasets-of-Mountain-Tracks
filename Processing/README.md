@@ -12,8 +12,6 @@ The library used for performing the map matching between the input track and the
 * Search radius (`radius`).
 * GPS error (`gps_error`).
 
-These parameters will be defined depending on the process (test or training) that will be carried out.
-
 Below are the steps followed to process the tracks.
 
 ## 1. Initialization
@@ -49,31 +47,11 @@ The next step is to process the document (if it has not been processed in anothe
     * Have fewer than 100 coordinates.
     * Have a distance greater than 300 meters between two coordinates.
     * Have a total distance less than 1000 meters.
-2. We proceed with the map matching algorithm depending on whether we are in a training or test process.
+2. We proceed with the map matching algorithm.
+    * Fixed values of `radius=100 meters` and `gps_error=100 meters`. 
+    * For `k=[2, 3, 4]`.
+    * If we find a matching track within 60 seconds, we return that matching track along with the parameters used.
 3. If we find a path, and we haven't discarded the track at any point, we proceed with the output of the found track.
-
-### 2.1. Training Process
-
-This process will be carried out for each zone for a total of 100 tracks. It will be used to find optimal `radius` and `gps_error` parameters for each zone. Once we have the output from these 100 tracks, we can find the average values for both parameters, and proceed with the test process.
-
-1. Define possible values for each parameter:
-    * `k=[2, 3, 4]`
-    * `radius=[2, 3, 4, 5]`
-    * `gps_error=[2, 3, 4, 5]`
-2. Convert the coordinates from the dataframe to WKT format (compatible for FastMapMatching).
-3. Define a minimum error and optimal values.
-4. For each combination of parameters, with a 60-second available time:
-    * Search for the matching track.
-    * If found, calculate the error between the original path and the found one.
-    * If the error is smaller than the minimum error, update it, along with the optimal values.
-5. Return the path and the most optimal parameters for that zone.
-
-### 2.2. Test Process
-
-This process takes place once 100 tracks of the defined zone have been processed. Now, we assign fixed values for `radius` and `gps_error`, which correspond to the average values found previously.
-
-1. For `k=[2, 3, 4]`.
-2. If we find a matching track within 60 seconds, we return that matching track along with the parameters used.
 
 ## 3. Matching Track Export
 

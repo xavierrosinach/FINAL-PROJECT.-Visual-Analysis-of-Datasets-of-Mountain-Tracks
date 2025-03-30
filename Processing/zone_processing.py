@@ -10,6 +10,7 @@ from pyproj import Transformer
 from shapely.geometry import Polygon, LineString
 from shapely.wkt import loads
 from geopy.distance import geodesic
+import traceback
 from fmm import Network,NetworkGraph,UBODTGenAlgorithm,UBODT,FastMapMatch, FastMapMatchConfig
 
 # Initialize transformer
@@ -48,7 +49,7 @@ def extract_information(json_path):
         "coordinates": pd.DataFrame(data["coordinates"], columns=["Longitude", "Latitude", "Elevation", "Unknown"])}
 
 # Function to check if we need to discard the file depending on the coordinates df
-def discard_coordinates(zone, coordinates_df, min_coordinates=100, max_distance=300, min_total_distance=1000, max_total_distance=20000):
+def discard_coordinates(zone, coordinates_df, min_coordinates=100, max_distance=300, min_total_distance=1000):
 
     if zone == 'canigo':
         bounds = bounds_canigo
@@ -60,12 +61,12 @@ def discard_coordinates(zone, coordinates_df, min_coordinates=100, max_distance=
     total_distance = 0.0    # Initialize a value for the total distance
 
     # Check if all coordinates are between the bounds
-    all_inside_canigo = (
+    all_inside = (
         (coordinates_df["Longitude"] >= bounds[0]) & (coordinates_df["Longitude"] <= bounds[1]) & 
         (coordinates_df["Latitude"] >= bounds[3]) & (coordinates_df["Latitude"] <= bounds[2])
     ).all()
 
-    if not all_inside_canigo:
+    if not all_inside:
         return False, 1, total_distance
 
     # Discard the track if it has less than min_coordinates
@@ -93,68 +94,7 @@ def discard_coordinates(zone, coordinates_df, min_coordinates=100, max_distance=
     return True, 0, total_distance
 
 # Function to obtain the matching track - training process
-def matching_track_training(model, coordinates_df, timeout=60):
-
-    # Define the candidates
-    k_candidates = [2, 3, 4]
-    r_candidates = [2, 3, 4, 5]
-    e_candidates = [2, 3, 4, 5]
-
-    # Get the track wkt
-    line = LineString(zip(coordinates_df["Longitude"], coordinates_df["Latitude"]))
-    track_wkt = line.wkt
-
-    # Initial error (infinite)
-    minimum_error = np.inf
-    best_result = None
-    best_k = 0
-    best_r = 0
-    best_e = 0
-
-    # Try for all candidates
-    for k in k_candidates:
-        for r in r_candidates:
-            for e in e_candidates:
-
-                print(f"    {k} // {r} // {e}")
-
-                signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(timeout)  # Trigger alarm after `timeout` seconds
-
-                try:
-                    # Obtain the fmm result
-                    config = FastMapMatchConfig(k,r,e)
-                    result = model.match_wkt(track_wkt, config)
-                except TimeoutException:
-                    continue
-                finally:
-                    signal.alarm(0)
-
-                # Check if we do not obtain an empty output
-                if result.pgeom.export_wkt().strip() == "LINESTRING()":
-                    continue
-
-                else:   
-                    mean_error = np.mean([c.error for c in result.candidates])
-
-                # If the error is less than the previous, this is the best matching track
-                if mean_error < minimum_error:
-                    minimum_error = mean_error
-                    best_result = result
-                    best_k = k
-                    best_r = r
-                    best_e = e
-                else:
-                    continue
-    
-    # Return error if the result has not been found
-    if best_result is not None:
-        return True, 0, best_result, best_k, best_r, best_e
-    else:
-        return False, 5, best_result, best_k, best_r, best_e
-
-# Function to obtain the matching track - training process
-def matching_track_test(model, coordinates_df, radius, gps_error, timeout=60):
+def matching_track(model, coordinates_df, radius, gps_error, timeout=60):
 
     # Define the candidates
     k_candidates = [2, 3, 4]
@@ -170,19 +110,20 @@ def matching_track_test(model, coordinates_df, radius, gps_error, timeout=60):
         signal.alarm(timeout)  # Trigger alarm after `timeout` seconds
 
         try:
-            # Obtain the fmm result
-            config = FastMapMatchConfig(k,radius,gps_error)
+            config = FastMapMatchConfig(k, radius, gps_error)
             result = model.match_wkt(track_wkt, config)
+            signal.alarm(0)  # Reset alarm
+
+            if result.pgeom.export_wkt().strip() != "LINESTRING()":
+                return True, 0, result, k, radius, gps_error
+
         except TimeoutException:
             continue
+
         finally:
             signal.alarm(0)
-
-        # Check if we do not obtain an empty output
-        if result.pgeom.export_wkt().strip() != "LINESTRING()":
-            return True, 0, result
     
-    return False, 6, None
+    return False, 6, None, 0, 0, 0
 
 # Function to save the coordinates that have more than 5 meters of error
 def out_track_coordinates(track_id, zone, fmm_output_df, no_osm_df, no_osm_df_path, max_error = 0.005):
@@ -202,7 +143,7 @@ def out_track_coordinates(track_id, zone, fmm_output_df, no_osm_df, no_osm_df_pa
     no_osm_df.to_csv(no_osm_df_path, index=False)
 
 # Process to output the files
-def output_process(file_path, out_df, out_df_path, zone, info, training_process, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path):
+def output_process(file_path, out_df, out_df_path, zone, info, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path):
 
     # Concatenate the output dataframe and save it
     out_df = pd.concat([out_df, pd.DataFrame({'track_id': [info['track']], 
@@ -218,8 +159,7 @@ def output_process(file_path, out_df, out_df_path, zone, info, training_process,
                                               'k': [k],
                                               'radius': [r],
                                               'gps_error': [e],
-                                              'mean_point_error': [np.mean([c.error for c in fmm_result.candidates])],
-                                              'is_training': [training_process]})], ignore_index=True)
+                                              'mean_point_error': [np.mean([c.error for c in fmm_result.candidates])]})], ignore_index=True)
     out_df.to_csv(out_df_path, index=False)  
 
     # Concatenate the new coordinates with the old ones
@@ -259,7 +199,7 @@ def output_process(file_path, out_df, out_df_path, zone, info, training_process,
     return out_df
 
 # Function to process all tracks
-def process_all_tracks(zone, raw_path, output_path, model, total_required_training_files=100):
+def process_all_tracks(zone, raw_path, output_path, model):
 
     # Define the paths of the dataframes to store information
     disc_df_path = os.path.join(output_path, 'discard_files.csv')
@@ -277,7 +217,7 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
         out_df = pd.read_csv(out_df_path)
     else:
         out_df = pd.DataFrame(columns=['track_id', 'zone', 'url', 'user', 'title', 'date_up', 'activity_type', 'activity_type_name', 
-                                       'difficulty', 'distance', 'k', 'radius', 'gps_error', 'mean_point_error', 'is_training'])
+                                       'difficulty', 'distance', 'k', 'radius', 'gps_error', 'mean_point_error'])
         
     # No-OSM data dataframe creation
     if os.path.exists(no_osm_df_path):
@@ -290,21 +230,8 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
     out_files = out_df['track_id'].unique().tolist()
     processed_files = list(set(disc_files + out_files))
 
-    # Check if we need to proceed with the training or not
-    training_output = out_df[out_df['is_training'] == 1]  
-    files_to_train = total_required_training_files - len(training_output)
-
-    # Get the best radius and gps_error and identify if we need to proceed with the training
-    if files_to_train == 0:
-        training_process = 0 
-        mean_radius = out_df['radius'].mean()
-        mean_gps_error = out_df['gps_error'].mean()
-        print(f"TEST PROCESS. Parameters: radius={mean_radius}, gps_error={mean_gps_error}.")
-    else:
-        training_process = 1
-        mean_radius = 0     # Initialize
-        mean_gps_error = 0      # Initialize
-        print(f"TRAINING PROCESS. Total files to train: {files_to_train} of {total_required_training_files}.")
+    # To iterate
+    i = 1
 
     # Iterate through all files
     for file in os.listdir(raw_path):
@@ -316,7 +243,8 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
         if int(track_id) not in processed_files:
 
             print('---')
-            print(f'Processing file {track_id}.')
+            print(f'Processing file {track_id}. ({i})')
+            i += 1
 
             # Get the path of the file and obtain all the information
             file_path = os.path.join(raw_path, file)
@@ -325,29 +253,17 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
             # Check if we need to discard the coordinates
             valid_file, error_type, total_distance = discard_coordinates(zone, info['coordinates'])
             km = np.round(total_distance/1000,2)
-            print(f'    Total distance: {km} km.')
 
             # If the file is valid, we will process with the matching
             if valid_file:
 
-                # Depending if one function or another, go to the matching track function
-                if training_process:
-                    valid_file, error_type, fmm_result, k, r, e = matching_track_training(model, info['coordinates'])
-                else:
-                    # For the first time we pass to the training, set the configuration
-                    if mean_radius == 0:
-                        mean_radius = out_df['radius'].mean()
-                        mean_gps_error = out_df['gps_error'].mean()
-                        training_process = 0
-                    
-                    # Test matching track processing
-                    valid_file, error_type, fmm_result = matching_track_test(model, info['coordinates'], mean_radius, mean_gps_error)
+                valid_file, error_type, fmm_result, k, r, e = matching_track(model, info['coordinates'], radius=0.001, gps_error=0.001)
 
                 # If the file is valid proceed with the output process
                 if valid_file:
                     print(f"    Found matching path for file {track_id}. Parameters k={k}, r={r}, e={e}")
                     file_output_path = os.path.join(output_path, file)      # Define the output path
-                    out_df = output_process(file_output_path, out_df, out_df_path, zone, info, training_process, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path)
+                    out_df = output_process(file_output_path, out_df, out_df_path, zone, info, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path)
                 
                 else:
                     # Concatenate the info with the discard dataframe and save it
@@ -355,6 +271,8 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
                                                             'zone': [zone], 
                                                             'error_type': error_type})], ignore_index=True)
                     disc_df.to_csv(disc_df_path, index=False)  
+
+                    print(f"    Error type: {error_type}")
 
             else:
                 # Concatenate the info with the discard dataframe and save it
@@ -365,14 +283,17 @@ def process_all_tracks(zone, raw_path, output_path, model, total_required_traini
 
                 print(f"    Error type: {error_type}")
 
+            # Remove the raw path
+            # os.remove(file_path)   
+
 # Function to extract the JSON files of the zip file
 def extract_zip(zone, extract_path):
 
     # Define the path of the zip file
-    raw_zip_path = f'../Data/Raw-Data/{zone}.zip'
+    raw_zip_path = f'../../Data/Raw-Data/{zone}.zip'
 
     # Provisional path to extract the zip
-    provisional_path = f'../Data/Raw-Data/provisional_{zone}'
+    provisional_path = f'../../Data/Raw-Data/provisional_{zone}'
 
     # If the zip file does not exist, break
     if not os.path.exists(raw_zip_path):
@@ -404,9 +325,9 @@ def create_network(zone, network_path):
     if zone == 'canigo':
         bounds = bounds_canigo
     elif zone == 'matagalls':
-        return
+        bounds = bounds_matagalls
     elif zone == 'vallferrera':
-        return
+        bounds = bounds_vallferrera
     
     # Obtain the graph with ox and save it
     x1,x2,y1,y2 = bounds
@@ -444,6 +365,7 @@ def main_processing(zone):
     # Extract the zip file if it does not exist
     if not os.path.exists(raw_path):
         extract_zip(zone, raw_path)
+        print(f"Zip file for zone {zone} extracted.")
 
     # Crete the network if it is not created
     if not os.path.exists(network_path):
@@ -466,4 +388,6 @@ def main_processing(zone):
     # Process all the files
     process_all_tracks(zone, raw_path, output_path, model)
     
-main_processing(zone='canigo')
+# main_processing(zone='canigo')    
+# main_processing(zone='matagalls')
+main_processing(zone='vallferrera')
