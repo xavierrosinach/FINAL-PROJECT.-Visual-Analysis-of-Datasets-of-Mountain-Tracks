@@ -7,7 +7,7 @@ Three zones:
 * Matagalls (*matagalls*)
 * Vall Ferrera (*vallferrera*)
 
-The library used for performing the map matching between the input track and the path registered in Open Street Map is FastMapMatching. This requires the road network as input and three configuration parameters:
+The library used for performing the map matching between the input track and the path registered in Open Street Map is [FastMapMatching](https://fmm-wiki.github.io/). This requires the road network as input and three configuration parameters:
 * Number of candidates (`k`).
 * Search radius (`radius`).
 * GPS error (`gps_error`).
@@ -28,7 +28,7 @@ Given the input zone, we create (or read) all the necessary folders and files fo
     * It uses the bounds defined at the beginning of the code.
     * Saves all the information to `/Data/OSM-Data/zone`.
 4. Creation of the network and graph necessary to create the model for Fast Map Matching.
-    * Create the network and graph from the data in `/Data/OSM-Data/zone`.
+    * Create the network and graph from the data in `/Data/OSM-Data/zone`. 
     * Generate (or read) the `udobt.txt` file.
     * Create the model based on the network, graph, and `udobt.txt` file.
 
@@ -43,15 +43,17 @@ Once we have the three record dataframes defined, we create a list with all the 
 
 The next step is to process the document (if it has not been processed in another execution).
 1. We perform an initial filter of the route (function `discard_coordinates()`) discarding those tracks that:
-    * Do not have all coordinates within the defined bounds.
-    * Have fewer than 100 coordinates.
-    * Have a distance greater than 300 meters between two coordinates.
-    * Have a total distance less than 1000 meters.
+    * Have less than the 50% of the coordinates inside the defined bounds. (<span style="color:red">*Error type = 1*</span>).
+    * Have fewer than 100 coordinates. (<span style="color:red">*Error type = 2*</span>).
+    * Have a distance greater than 300 meters between two coordinates. (<span style="color:red">*Error type = 3*</span>).
+    * Have a total distance less than 1000 meters. (<span style="color:red">*Error type = 4*</span>).
 2. We proceed with the map matching algorithm.
     * Fixed values of `radius=100 meters` and `gps_error=100 meters`. 
     * For `k=[2, 3, 4]`.
     * If we find a matching track within 60 seconds, we return that matching track along with the parameters used.
+    * If no match is found for all values of `k`, we discard the file. (<span style="color:red">*Error type = 5*</span>).
 3. If we find a path, and we haven't discarded the track at any point, we proceed with the output of the found track.
+4. For some tracks, the library cannot process them and ends execution with a *Segmentation Fault*. In these cases, the error is introduced manually. (<span style="color:red">*Error type = 6*</span>).
 
 ## 3. Matching Track Export
 
