@@ -10,14 +10,13 @@ from pyproj import Transformer
 from shapely.geometry import Polygon, LineString
 from shapely.wkt import loads
 from geopy.distance import geodesic
-import traceback
 from fmm import Network,NetworkGraph,UBODTGenAlgorithm,UBODT,FastMapMatch, FastMapMatchConfig
 
 # Initialize coordinates transformer
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:2154", always_xy=True)
 
 # Define a dictionary for the bounds of each zone
-bounds_dict = {"canigo": (2.2, 2.7, 42.65, 42.35), "matagalls": (2.3, 2.5, 41.85, 41.8), "vallferrera": (1.3, 1.4, 42.65, 42.55)}
+bounds_dict = {"canigo": (2.2, 2.7, 42.4, 42.6), "matagalls": (2.3, 2.5, 41.8, 41.9), "vallferrera": (1.2, 1.7, 42.5, 42.8)}
 
 class TimeoutException(Exception):     # Timeout exception creation
     pass
@@ -99,13 +98,16 @@ def discard_coordinates(zone, coordinates_df, percentage_inside_bounds=0.5, min_
 
     bounds = bounds_dict.get(zone)  # Define the bounds using the dictionary
     total_distance = 0.0    # Initialize a value for the total distance
+   
 
     # Obtain the total sum of coordinates that are inside the defined bounds
-    inside_bounds = ((coordinates_df["Longitude"] >= bounds[0]) & (coordinates_df["Longitude"] <= bounds[1]) & 
-                     (coordinates_df["Latitude"] >= bounds[3]) & (coordinates_df["Latitude"] <= bounds[2])).sum()
-
-    # Check if the percentage of coordinates inside the bound is less than the defined to print the error
-    if (inside_bounds / len(coordinates_df)) < percentage_inside_bounds:
+    inside_bounds = ((coordinates_df["Longitude"] >= bounds[0]).all() &
+                     (coordinates_df["Longitude"] <= bounds[1]).all() &
+                     (coordinates_df["Latitude"] >= bounds[2]).all() &
+                     (coordinates_df["Latitude"] <= bounds[3]).all())
+    
+    # Check if all coordinates are inside the bound
+    if not inside_bounds:
         return False, 1, total_distance
 
     # Discard the track if it has less than min_coordinates
@@ -223,7 +225,7 @@ def matching_track(model, coordinates_df, radius, gps_error, timeout=60):
     return False, 5, None, 0, 0, 0  # Return error if any matching track is found
 
 # Function to process all tracks
-def process_all_tracks(zone, raw_path, output_path, model):
+def process_all_tracks(zone, raw_path, output_path, output_tracks_path, model):
 
     # Define the paths of the dataframes to store information
     disc_df_path = os.path.join(output_path, 'discard_files.csv')
@@ -262,10 +264,6 @@ def process_all_tracks(zone, raw_path, output_path, model):
 
         if int(track_id) not in processed_files:            # Check if the file is already processed or not
 
-            print('---')
-            print(f'Processing file {track_id}. ({i})')
-            i += 1
-
             # Get the path of the file and obtain all the information
             file_path = os.path.join(raw_path, file)
             info = extract_information(file_path)
@@ -278,19 +276,21 @@ def process_all_tracks(zone, raw_path, output_path, model):
                 valid_file, error_type, fmm_result, k, r, e = matching_track(model, info['coordinates'], radius=0.001, gps_error=0.001)     # Applying the function
 
                 if valid_file:                  # If the file is valid proceed with the output process
-                    file_output_path = os.path.join(output_path, file)      # Define the output path
+                    file_output_path = os.path.join(output_tracks_path, file)      # Define the output path
                     out_df = output_process(file_output_path, out_df, out_df_path, zone, info, fmm_result, total_distance, k, r, e, no_osm_df, no_osm_df_path)      # Applying the function
-                    print(f"    Found matching path for file {track_id}. Parameters k={k}, r={r}, e={e}")   # Print information
-                
+                    print(f"Found matching path for file {track_id}. ({i})")  # Print information
+
                 else:   # If the file is not valid
                     disc_df = pd.concat([disc_df, pd.DataFrame({'track_id':[info['track']], 'zone':[zone], 'error_type':error_type})], ignore_index=True)
                     disc_df.to_csv(disc_df_path, index=False)   # Concatenate the info with the discard dataframe and save it
-                    print(f"    Error type: {error_type}")    # Print information
+                    print(f"Error type {error_type} for file {track_id}. ({i})")    # Print information
 
             else:   # If the file is not valid
                 disc_df = pd.concat([disc_df, pd.DataFrame({'track_id':[info['track']], 'zone':[zone], 'error_type':error_type})], ignore_index=True)
                 disc_df.to_csv(disc_df_path, index=False)   # Concatenate the info with the discard dataframe and save it
-                print(f"    Error type: {error_type}")    # Print information
+                print(f"Error type {error_type} for file {track_id}. ({i})")    # Print information
+
+            i += 1
 
             # Remove the raw path
             # os.remove(file_path)   
@@ -302,8 +302,9 @@ def main_processing(zone):
     raw_path = f'../../Data/Raw-Data/{zone}'
     output_path = f'../../Data/Output/{zone}'
     network_path = f'../../Data/OSM-Data/{zone}'
+    output_tracks_path = os.path.join(output_path, 'tracks')
 
-    os.makedirs(output_path, exist_ok=True)    # Create the output path if it does not exist
+    os.makedirs(output_tracks_path, exist_ok=True)    # Create the output path if it does not exist
 
     if not os.path.exists(raw_path):    # Extract the zip file if it does not exist
         extract_zip(zone, raw_path)
@@ -323,8 +324,8 @@ def main_processing(zone):
 
     model = FastMapMatch(network,graph,ubodt)   # Creation of the model using FMM
 
-    process_all_tracks(zone, raw_path, output_path, model)  # Given all the necessary files and the model, process all the tracks of the zone
+    process_all_tracks(zone, raw_path, output_path, output_tracks_path, model)  # Given all the necessary files and the model, process all the tracks of the zone
     
-# main_processing(zone='canigo')    
+# main_processing(zone='canigo')
 # main_processing(zone='matagalls')
 main_processing(zone='vallferrera')
