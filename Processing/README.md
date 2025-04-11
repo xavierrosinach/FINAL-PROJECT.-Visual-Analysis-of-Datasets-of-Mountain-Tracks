@@ -78,5 +78,17 @@ Un cop executat aquest segon procés, haurem omplert la carpeta `FMM-Output` amb
 
 ## 3. POSTPROCESSING
 
+La tercera i última part del processat de les dades es basa en fet un netejat de les dades extretes a la segona part del procés general. Es basa en dos procediments: el primer agafa cada *track* de sortida i el neteja extreient informació rellevant; i el segon mira un altre cop tots aquests fitxers i va completant el *dataframe* `edges`. És necessari mirar els *tracks* de sortida dos cops. A continuació veurem perquè. Tot aquest procés es troba a [zone_postprocessing.py](zone_postprocessing.py).
 
+Com ja hem comentat, el primer sub-procés neteja cada *track* que anteriorment hem extret:
+
+1. Inicialment, llegim el fitxer *json* inicial i obtenim informació com ara `url`, `user`, `date` (la qual transformem a un format correcte amb `convert_date()`), i `difficulty`. 
+2. Utilitzem la funció `clean_coordinates_df()` per a netejear el *dataframe* de coordenades. Aquesta funció té com entrada el *dataframe* de coordenades inicial, el de sortida de `fmm`, i el d'eixos.
+
+    * A partir del *dataframe* inicial, n'agafem les coordenades i l'elevació. Afegim altres columnes com ara `dist` (distància acumulativa a mesura que van passant coordenades - calculem la distància entre dos punts utilitzant `geodesic`), `km` (conté el tram de quilòmetre on es troben aquelles coordenades de la ruta). 
+    * Amb la sortida de `fmm` (recordem que tenim coordenades i punts dels eixos), fem un *merge* amb el *dataframe* d'eixos per tal d'obtenir l'indentificador de l'eix per on es passa.
+    * A la funció `clean_single_edges()` li passem el *merged dataframe* anterior. Amb aquesta evitem que hi hagi eixos aïllats; és a dir, que es visitin un cop en un veïnat (degut a potser un error de la llibreria). Insertem l'identificador anterior. 
+    * Concatenem aquest *dataframe* de sortida amb l'incial, i creem la columna `id` amb un identificador que enumera cada punt de coordenades. Així doncs, tindrem un *dataframe* final amb columnes `id`, `edge_id`, `lon`, `lat`, `elev`, `dist`, `km`, `clean_lon`, i `clean_lat`. 
+    * Retornem, juntament amb el *dataframe*, la distància total, l'elevació guanyada i perduda, i les primeres i últimes coordenades (informació que afegirem al *dataframe* comú `cleaned_out`).
+    
 
