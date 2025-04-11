@@ -90,5 +90,8 @@ Com ja hem comentat, el primer sub-procés neteja cada *track* que anteriorment 
     * A la funció `clean_single_edges()` li passem el *merged dataframe* anterior. Amb aquesta evitem que hi hagi eixos aïllats; és a dir, que es visitin un cop en un veïnat (degut a potser un error de la llibreria). Insertem l'identificador anterior. 
     * Concatenem aquest *dataframe* de sortida amb l'incial, i creem la columna `id` amb un identificador que enumera cada punt de coordenades. Així doncs, tindrem un *dataframe* final amb columnes `id`, `edge_id`, `lon`, `lat`, `elev`, `dist`, `km`, `clean_lon`, i `clean_lat`. 
     * Retornem, juntament amb el *dataframe*, la distància total, l'elevació guanyada i perduda, i les primeres i últimes coordenades (informació que afegirem al *dataframe* comú `cleaned_out`).
-    
+
+3. Apliquem un filtratge per encara homogeneitzar més les nostres dades. Ens quedem amb aquells *tracks* que tenen una distància entre 3 i 30 quilòmetres, i que l'elevació guanyada i perduda sigui inferior a 5000 metres. En el cas de pasar aquest filtre, guardem el *track* a `cleaned_out`, al contrari, descartem el fitxer (**tipus d'error 6**).
+
+
 
