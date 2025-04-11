@@ -12,7 +12,7 @@ A continuació, s'explicarà tot el procés realitzat, el qual es troba dividit 
 
 ## 1. PREPROCESSING
 
-Aquesta primera part del processat es basa en definir totes les adreces de totes les dades i llegir totes les bases de dades per a poder-les utilitzar en un futur. Podem utilitzar aquest codi per a crear les carpetes i els fitxers en una execució inicial, o llegir totes les dades i *paths* en execucions posteriors. 
+Aquesta primera part del processat es basa en definir totes les adreces de totes les dades i llegir totes les bases de dades per a poder-les utilitzar en un futur. Podem utilitzar aquest codi per a crear les carpetes i els fitxers en una execució inicial, o llegir totes les dades i *paths* en execucions posteriors. Es pot trobar el codi a [zone_preprocessing.py](zone_preprocessing.py).
 
 El pseudocodi (diferenciat per cada zona) és el següent:
 
@@ -38,6 +38,45 @@ El pseudocodi (diferenciat per cada zona) és el següent:
 6. Finalment, cridarem a `create_waypoints_df()`, que crearà el *dataframe* `waypoints`(dins de `Output-Data/Dataframes`), el qual tindrà la informació sobre aquells punts d'interés on passen les rutes. 
 
 Amb aquests passos haurem creat toes les carpetes i algunes altres dades d'entrada que necessitàvem. Amb tota aquesta informació podrem començar a executar l'algoritme de *Fast Map Matching* definit a la segona part del codi.
+
+## 2. FMM-PROCESSING
+
+La segona part del processat de les dades es basa en aplicar l'algoritme de *Fast Map Matching* per a trobar els camins d'*Open Street Map* pels quals ha passat la ruta processada. S'utilitza la llibreria `fmm` ([enllaç amb documentació](https://fmm-wiki.github.io/)), la qual per a cada coordenada d'entrada n'obté una de sortida que correspon a un camí de la xarxa definida (creada amb `osmnx`). L'algoritme que la llibreria utilitza, fa servir tres paràmetres d'entrada:
+
+* El nombre de candidats `k`: aquest correspon al nombre d'opcions inicials de *matching point* que la llibreria troba. Al final, es queda amb aquella amb menys error.
+* El radi de cerca `radius`: donat el punt d'entrada, mira en aquest radi tots els candidats especificats (en graus).
+* L'error de GPS `gps_error`: correspon a l'error que li permet al GPS (en graus). 
+
+A continuació, explicarem el codi seguit en aquesta segona part del processat, juntament amb els paràmetres d'entrada de `fmm` utilitzants. Hem de tenir en compte que a l'inici d'aquest, s'ha cridat la funció que crida a la part de **PREPROCESSING**, per tant, tindrem tots els dataframes definits. El codi es pot trobar a [zone_fmm.py](zone_fmm.py).
+
+1. Un cop cridada la funció principal de la part de preprocessat, creem la xarxa i el graf de camins que necessitarem com a entrada per a `fmm`. També creem (o llegim) el fitxer `UBODT` (també necessari). Finalment, amb la xarxa, el graf, i el fitxer, podem crear el model que necessitem. 
+2. Obtenim una llista amb aquells *tracks* ja processats (o bé es troben al *dataframe* de sortida o al de fitxers descartats). Amb aquesta llista, comprovarem, abans de processar un fitxer, que no hagi estat processat anteriorment. 
+
+*A partir d'aquí, entrarem a un procés de tractament per a cada fitxer que es trobi a la carpeta d'entrada. Com ja hem comentat, el fitxer serà tractat únicament si no ha estat abans.*
+
+3. Utitlizem la funció `extract_information` per a, mitjançant el *path* del fitxer *json* de la ruta, obtenim els *dataframes* de coordenades i de punts d'interés, i també el tipus d'activitat (utilitzat posteriorment). 
+4. En el cas de que el tipus d'activitat sigui "*Senderisme*" procedirem amb el processat. En canvi, descartarem el fitxer (**tipus d'error 6**). Això ho fem per homogeneitzar la base de dades de sortida. Ens interessa fer un estudi per a un perfil d'usuaris concret.
+5. Utilitzarem la funció `discard_coordinates()` que ens ajudarà a definir si el fitxer d'entrada el processarem, o no. Aquesta funció:
+
+    * Comprova que totes les coordenades es trobin dins de les fites de la zona definida. En el cas contrari, descartarem el fitxer (**tipus d'error 1**).
+    * S'assegura que hi ha un mínim de 100 coordenades al *dataframe*. En el cas contrari, descartarem el fitxer (**tipus d'error 2**).
+    * Mira que, entre dos coordenades consecutives, no hi hagi una distància superior a 300 metres. Si hi és, descartarem el fitxer (**tipus d'error 3**).
+    * Comprova que la distància total del la ruta sigui superior a 1000 metres. En el cas contrari, descartarem el fitxer (**tipus d'error 4**).
+
+6. Ara, si la funció anterior ens permet procedir amb el processat del fitxer, durem a terme el procés de *Fast Map Matching* utilitzant la funció `matching_track()`, la qual utilitza el *dataframe* de coordenades i el model definit, i ens retorna el resultat (en format de `fmm`), els paràmetres utilitzats, i si hi ha hagut algun error.
+
+    * Els paràmetres que utilitzarem per a cridar el *Fast Map Matching* seran, inicialment: `k=2`, `radius=0.001` (aproximadament 100 metres) i `gps_error=0.001` (aproximadament 100 metres). 
+    * Transformarem les coordenades del *dataframe* d'entrada en un format adient, i aplicarem la funció `match_wkt()` de la llibreria. 
+    * En el cas de trobar algun resultat, el retornarem. En canvi, si no el troba, augmentarem el valor de `k` (fins arribar a `k=4`). Donarem, també, un *timeout* de 60 segons per a poder aplicar la funció.
+    * En cas de no haver pogut trobar cap *matching track*, retornarem que el fitxer s'ha de descartar (**tipus d'error 5**).
+
+7. Si hem pogut processar el *track*, en guardarem els punts d'interés al *dataframe* `waypoints` comú per a totes les rutes d'una zona. Utilitzem la llibreria `waypoints_df_cleaning()`, amb la qual netejem el *dataframe* d'entrada quedant-nos només amb informació rellevant.
+8. Amb la funció `save_fmm_output()` utilitzem el fitxer resultat del *Fast Map Matching* i els guardem en format *csv* a la carpeta `FMM-Output`. Per a cada punt trobat en guardem les coordenades i també l'eix per on passa (`u` i `v` igual que al *dataframe* d'eixos - també reordenem aquests valors igual que abans).
+9. Finalment, guardem les dades als *dataframe* de fitxers de sortida o de fitxers descartats. 
+
+Un cop executat aquest segon procés, haurem omplert la carpeta `FMM-Output` amb fitxers *csv* de tots aquells *tracks* que s'han pogut processar. També hem omplert els *dataframes* `waypoints`, `output_files` i `discard_files`. Ara, amb totes aquestes dades, podrem acabar amb la tercera part del processat. 
+
+## 3. POSTPROCESSING
 
 
 
