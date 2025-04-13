@@ -2,9 +2,9 @@
 
 Aquesta carpeta conté tots els fitxers necessaris per al processat de les dades d'entrada per a poder obtenir tota la informació necessaria per a poder mostrar les visualitzacions desitjades. El codi ha estat executat per les tres zones de les quals es té informació:
 
-* El Canigó (fitxer d'entrada: `canigo.zip`). Zona definida per les fites `[(42.4, 2.2)- (42.6, 2.7)]`. `x` fitxers inicials de *tracks*.
-* Matagalls (fitxer d'entrada `matagalls.zip`). Zona definida per les fites `[(41.8, 2.3)- (41.8, 2.5)]`. `x` fitxers inicials de *tracks*.
-* Vall Ferrera (fitxer d'entrada `vallferrera.zip`). Zona definida per les fites `[(42.5, 1.2)- (42.8, 1.7)]`. `x` fitxers inicials de *tracks*.
+* El Canigó (fitxer d'entrada: `canigo.zip`). Zona definida per les fites `[(42.4, 2.2)- (42.6, 2.7)]`. 9890 fitxers inicials de *tracks*.
+* Matagalls (fitxer d'entrada `matagalls.zip`). Zona definida per les fites `[(41.8, 2.3)- (41.8, 2.5)]`. 9932 fitxers inicials de *tracks*.
+* Vall Ferrera (fitxer d'entrada `vallferrera.zip`). Zona definida per les fites `[(42.5, 1.2)- (42.8, 1.7)]`. 14401 fitxers inicials de *tracks*.
 
 Com podem veure, l'entrada del codi serà un fitxer *zip* que contindrà tots els *tracks* d'entrada per la zona definida. Degut a que cada carpeta conté molts *tracks*, s'ha adaptat el codi per tal de poder anar processant rutes en execucions diferents; és a dir, es va mantenint un registre de les rutes processades per tal de no processar rutes ja tractades en execucions posteriors. 
 
@@ -93,5 +93,28 @@ Com ja hem comentat, el primer sub-procés neteja cada *track* que anteriorment 
 
 3. Apliquem un filtratge per encara homogeneitzar més les nostres dades. Ens quedem amb aquells *tracks* que tenen una distància entre 3 i 30 quilòmetres, i que l'elevació guanyada i perduda sigui inferior a 5000 metres. En el cas de pasar aquest filtre, guardem el *track* a `cleaned_out`, al contrari, descartem el fitxer (**tipus d'error 6**).
 
+Un cop tenim les rutes processades, entrarem al *dataframe* `cleaned_out` per a acabar-lo de transformar tal i com volem:
+
+1. Transformem la data en format `pandas datetime` i en trobem variants com ara l'any, el mes (en lletres), el dia de la setmana, o l'estació. 
+2. Utilitzant la funció `obtain_weather_dataframe()`, obtenim el *dataframe* amb la temperatura mínima i màxima, i la condició meteorològica des de la data mínima a la data màxima de rutes que tenim a la zona especificada. Utilitzem la funció `requests` per entrar a una *API* que ens ho retorna. 
+3. Fusionem els dos *dataframes* per tenir les dades meteorològiques de cada data. 
+4. Finalment, guardem el *dataframe*. 
+
+Ara ja tenim totes les rutes processades correctament. L'únic que ens falta és processar els eixos. Ho fem de la següent manera:
+
+1. Mirem per cada ruta del *dataframe* proecssat tots els eixos pels quals s'ha passat, i els fiquem en una llista. 
+2. Per cada eix en aquesta llista, n'afegim l'identificador del *track* al *dataframe* dels eixos, i incrementem el contador. 
+3. Tallem el *dataframe* dels eixos de forma que seleccionem únicament aquells pels quals s'ha passat algun cop. 
+4. Calculem la columna `weight`, que és una normalització del contatge anterior de l'1 al 10.
+
+## FINAL DEL PROCESSAT
+
+Un cop hem aplicades aquestes funcions per a cada zona, hem obtingut el total de *tracks* per a cada zona:
+
+* El Canigó: 5314 fitxers de *tracks* de sortida.
+* Matagalls: 5284 fitxers de *tracks* de sortida.
+* Vall Ferrera: 6596 fitxers de *tracks* de sortida.
+
+Ara, amb totes aquestes dades, podrem començar amb tot el procés de creació de visualitzacions.
 
 
