@@ -76,7 +76,7 @@ def convert_date(date):
 # Cleans the coordinates df and returns other parametes
 def clean_coordinates_df(coords_df, fmm_out, edges):
 
-    coords = coords_df[['lon','lat','elev']].copy()     # Select the needed columns
+    coords = coords_df[['lon','lat','elev', 'timestamp']].copy()     # Select the needed columns
 
     # First, create shifted lat/lon columns to compare with previous row
     coords['prev_lat'] = coords['lat'].shift()
@@ -90,8 +90,15 @@ def clean_coordinates_df(coords_df, fmm_out, edges):
     # Optional: drop the helper columns if you don't need them
     coords.drop(['prev_lat', 'prev_lon'], axis=1, inplace=True)
 
+    # Obtain the cumulative time
+    coords['time_diff'] = round(coords['timestamp'].diff().fillna(0) / 1000, 2)
+    coords['time'] = coords['time_diff'].cumsum()
+
+    coords['pace'] = round((coords['dist'] / coords['time_diff']) * 3.6, 2).fillna(0)     # Pace in km/h
+    coords['time'] = round(coords['time'] / 60, 2)   # Time to minutes
+
     # Sum the distance as a cumulative sumatory
-    coords['dist'] = round(coords['dist'].cumsum() / 1000, 2)
+    coords['dist'] = round(coords['dist'].cumsum() / 1000, 2)   # Distance in km
 
     # For each edge matched, get the id
     merged_fmm_out = fmm_out.merge(edges, on=['u', 'v'])    # Merge to obtain the id
@@ -108,8 +115,8 @@ def clean_coordinates_df(coords_df, fmm_out, edges):
 
     # Calculate other statistics
     total_dist = cleaned_coords['dist'].iloc[-1]
-    cleaned_coords['elev_diff'] = cleaned_coords["elev"].diff()
-    elev_gain = round(cleaned_coords[cleaned_coords["elev_diff"] > 0]["elev_diff"].sum(), 2)
+    cleaned_coords['elev_diff'] = cleaned_coords["elev"].diff().fillna(0)       # Elevation difference in meters
+    elev_gain = round(cleaned_coords[cleaned_coords["elev_diff"] > 0]["elev_diff"].sum(), 2)    
     elev_loss = round(abs(cleaned_coords[cleaned_coords["elev_diff"] < 0]["elev_diff"].sum()), 2) 
 
     # First and last coordinates
@@ -118,7 +125,11 @@ def clean_coordinates_df(coords_df, fmm_out, edges):
     last_lat = cleaned_coords['lat'].iloc[-1]
     last_lon = cleaned_coords['lon'].iloc[-1]
 
-    return cleaned_coords[['id','edge_id','lon','lat','elev','dist','km','clean_lon','clean_lat']], total_dist, elev_gain, elev_loss, first_lat, first_lon, last_lat, last_lon
+    # Total time and average pace to return
+    total_time = coords['time'].iloc[-1]
+    avg_pace = coords['pace'].mean()
+
+    return cleaned_coords[['id','edge_id','lon','lat','elev','dist','km','time','elev_diff','pace','clean_lon','clean_lat']], total_dist, elev_gain, elev_loss, first_lat, first_lon, last_lat, last_lon, total_time, avg_pace
 
 # Function to obtain the weather information of a given zone from one date to another
 def obtain_weather_dataframe(start_date, end_date, zone):
@@ -193,8 +204,8 @@ def final_output_cleaning(df, zone):
     merged_df = df.merge(weather_df, on='date', how='inner')    # Merge df with weather df
 
     # Select only needed columns
-    final_df = merged_df[['track_id','url','user','difficulty','distance','elev_gain','elev_loss','date','year','month','weekday','season',
-                          'min_temp','max_temp','weather_condition','first_lat','first_lon','last_lat','last_lon']]     
+    final_df = merged_df[['track_id','url','title','user','difficulty','distance','elev_gain','elev_loss','date', 'year','month','weekday','season','min_temp',
+                          'max_temp','weather_condition','total_time', 'avg_pace', 'first_lat', 'first_lon','last_lat','last_lon']]     
 
     return final_df
 
@@ -228,30 +239,40 @@ def zone_postprocessing(zone, log_path):
 
             # Get the desired information
             url = data.get("url")
+            title = data.get("title")
             user = int(data.get("user"))
             date = convert_date(data.get("date-up"))
             difficulty = data.get("difficulty")
-            coords, total_dist, elev_gain, elev_loss, first_lat, first_lon, last_lat, last_lon = clean_coordinates_df(pd.DataFrame(data["coordinates"], columns=["lon", "lat", "elev", "unkn"]), out_fmm, edges_df)
+            coords, total_dist, elev_gain, elev_loss, first_lat, first_lon, last_lat, last_lon, total_time, avg_pace = clean_coordinates_df(pd.DataFrame(data["coordinates"], columns=["lon", "lat", "elev", "timestamp"]), out_fmm, edges_df)
 
-            # Filter activities - we do not want outliers
-            if (total_dist >= 3) & (total_dist < 30) & (elev_gain < 5000) & (elev_loss < 5000):
+            # Check if any pace is infinite or all the values in time are the same
+            all_same = coords['time'].nunique() == 1
+            has_inf = np.isinf(coords['pace']).any()
 
-                # Add the information into the cleaned dataframe
-                clean_out_df = pd.concat([clean_out_df, pd.DataFrame({'track_id':[track_id], 'url':[url], 'user':[user], 'difficulty':[difficulty], 'distance':[total_dist],
-                                                                    'elev_gain':[elev_gain], 'elev_loss':[elev_loss], 'date':[date], 'first_lat':[first_lat], 'first_lon':[first_lon],
-                                                                    'last_lat':[last_lat], 'last_lon':[last_lon]})], ignore_index=True)
-                clean_out_df = clean_out_df.drop_duplicates(subset=['track_id'])      # Avoid duplications
-                clean_out_df.to_csv(clean_out_df_path, index=False)     # Save the dataframe on each iteration to avoid missing data
-
-                # Save the coords dataframe
-                coords.to_csv(os.path.join(cleaned_tracks_path, str(track_id) + '.csv'), index=False)
-
-            else:       # Update the discarded files dataframe
+            if has_inf or all_same:
                 disc_df = pd.concat([disc_df, pd.DataFrame({'track_id':[track_id], 'zone':[zone], 'error_type':[6]})], ignore_index=True)
                 disc_df.to_csv(disc_df_path, index=False)   # Concatenate the info with the discard dataframe and save it
+            
+            else:
+                # Filter activities - we do not want outliers
+                if (total_dist >= 3) & (total_dist < 30) & (elev_gain < 5000) & (elev_loss < 5000):
+
+                    # Add the information into the cleaned dataframe
+                    clean_out_df = pd.concat([clean_out_df, pd.DataFrame({'track_id':[track_id], 'url':[url], 'title':[title], 'user':[user], 'difficulty':[difficulty], 'distance':[total_dist],
+                                                                        'elev_gain':[elev_gain], 'elev_loss':[elev_loss], 'date':[date], 'total_time':[total_time], 'avg_pace':[avg_pace],
+                                                                        'first_lat':[first_lat], 'first_lon':[first_lon], 'last_lat':[last_lat], 'last_lon':[last_lon]})], ignore_index=True)
+                    clean_out_df = clean_out_df.drop_duplicates(subset=['track_id'])      # Avoid duplications
+                    clean_out_df.to_csv(clean_out_df_path, index=False)     # Save the dataframe on each iteration to avoid missing data
+
+                    # Save the coords dataframe
+                    coords.to_csv(os.path.join(cleaned_tracks_path, str(track_id) + '.csv'), index=False)
+
+                else:       # Update the discarded files dataframe
+                    disc_df = pd.concat([disc_df, pd.DataFrame({'track_id':[track_id], 'zone':[zone], 'error_type':[6]})], ignore_index=True)
+                    disc_df.to_csv(disc_df_path, index=False)   # Concatenate the info with the discard dataframe and save it
         
     # Obtain the final output dataframe and save it
-    final_out_df = final_output_cleaning(clean_out_df, zone).reset_index()
+    final_out_df = final_output_cleaning(clean_out_df, zone)
     final_out_df.to_csv(clean_out_df_path, index=False)
 
     # Process the edges

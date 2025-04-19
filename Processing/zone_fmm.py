@@ -78,7 +78,7 @@ def extract_information(json_path):
 
     # Obtain the two dataframes
     activity_type = data.get("activity", {}).get("name")
-    coords_df = pd.DataFrame(data["coordinates"], columns=["Longitude", "Latitude", "Elevation", "Unknown"])
+    coords_df = pd.DataFrame(data["coordinates"], columns=["Longitude", "Latitude", "Elevation", "Timestamp"])
     wayp_df = pd.DataFrame(data.get("waypoints", []))
 
     return activity_type, coords_df, wayp_df

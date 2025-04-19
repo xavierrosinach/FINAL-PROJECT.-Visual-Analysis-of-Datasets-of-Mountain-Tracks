@@ -144,9 +144,9 @@ def create_cleaned_output_df(dataframes_path):
     if os.path.exists(clean_out_df_path):
         clean_out_df = pd.read_csv(clean_out_df_path)
     else:   # If it does not exist, we create it
-        clean_out_df = pd.DataFrame(columns=['track_id','url','user','difficulty','distance','elev_gain','elev_loss','date',
-                                             'year','month','weekday','season','min_temp','max_temp','weather_condition','first_lat',
-                                             'first_lon','last_lat','last_lon'])
+        clean_out_df = pd.DataFrame(columns=['track_id','url','title','user','difficulty','distance','elev_gain','elev_loss','date',
+                                             'year','month','weekday','season','min_temp','max_temp','weather_condition',
+                                             'total_time', 'avg_pace', 'first_lat', 'first_lon','last_lat','last_lon'])
         clean_out_df.to_csv(clean_out_df_path, index=False)
 
     return clean_out_df_path, clean_out_df
