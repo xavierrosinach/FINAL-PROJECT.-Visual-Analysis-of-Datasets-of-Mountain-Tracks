@@ -29,6 +29,6 @@ def zone_full_processing(zone):
 
     print(f"Processing for zone '{zone}' completed in {int(mins)} min {secs:.1f} sec.")
 
-zone_full_processing('vallferrera')
-zone_full_processing('canigo')
-zone_full_processing('matagalls')
+# zone_full_processing('vallferrera')
+# zone_full_processing('canigo')
+# zone_full_processing('matagalls')
